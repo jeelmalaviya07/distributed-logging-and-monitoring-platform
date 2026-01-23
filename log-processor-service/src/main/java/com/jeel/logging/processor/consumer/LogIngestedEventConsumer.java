@@ -49,7 +49,11 @@ public class LogIngestedEventConsumer {
 
             validator.validate(event);
 
-            String eventId = event.getTenantId() + ":" + event.getRequestId();
+            String safeTenantId = event.getTenantId() != null
+                    ? event.getTenantId()
+                    : "UNKNOWN";
+
+            String eventId = safeTenantId + ":" + event.getRequestId();
 
             if (processedEventStore.isProcessed(eventId)) {
                 log.warn("⚠️ Duplicate event ignored | eventId={}", eventId);
