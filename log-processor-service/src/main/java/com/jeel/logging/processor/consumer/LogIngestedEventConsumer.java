@@ -11,6 +11,7 @@ import com.jeel.logging.processor.kafka.RetryKafkaPublisher;
 import com.jeel.logging.common.events.LogIngestedEvent;
 import com.jeel.logging.common.events.LogEvent;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import com.jeel.logging.processor.kafka.DlqKafkaPublisher;
 
 @Component
 public class LogIngestedEventConsumer {
@@ -18,16 +19,21 @@ public class LogIngestedEventConsumer {
     private final ProcessedEventStore processedEventStore;
     private final LogIngestedEventValidator validator;
     private final RetryKafkaPublisher retryKafkaPublisher;
+    private final DlqKafkaPublisher dlqKafkaPublisher;
+
 
     public LogIngestedEventConsumer(
             ProcessedEventStore processedEventStore,
             LogIngestedEventValidator validator,
-            RetryKafkaPublisher retryKafkaPublisher
+            RetryKafkaPublisher retryKafkaPublisher,
+            DlqKafkaPublisher dlqKafkaPublisher
     ) {
         this.processedEventStore = processedEventStore;
         this.validator = validator;
         this.retryKafkaPublisher = retryKafkaPublisher;
+        this.dlqKafkaPublisher = dlqKafkaPublisher;
     }
+
 
 
     private static final Logger log =
@@ -45,15 +51,15 @@ public class LogIngestedEventConsumer {
 
         int retryCount = RetryKafkaPublisher.extractRetryCount(record.headers());
 
+        String safeTenantId = event.getTenantId() != null
+                ? event.getTenantId()
+                : "UNKNOWN";
+
+        String eventId = safeTenantId + ":" + event.getRequestId();
+
         try {
 
             validator.validate(event);
-
-            String safeTenantId = event.getTenantId() != null
-                    ? event.getTenantId()
-                    : "UNKNOWN";
-
-            String eventId = safeTenantId + ":" + event.getRequestId();
 
             if (processedEventStore.isProcessed(eventId)) {
                 log.warn("⚠️ Duplicate event ignored | eventId={}", eventId);
@@ -93,14 +99,19 @@ public class LogIngestedEventConsumer {
 
             } else {
 
-                log.error("Max retries exceeded | eventId={}",
-                        event.getTenantId() + ":" + event.getRequestId());
+            log.error("Max retries exceeded | routing to DLQ | eventId={}",
+                    eventId);
 
-                // Phase 9.4: route to DLQ
+            dlqKafkaPublisher.publishToDlq(
+                    event,
+                    ex.getClass().getSimpleName() + ": " + ex.getMessage(),
+                    retryCount
+            );
 
-                ack.acknowledge();
-            }
+            ack.acknowledge();
         }
+
+    }
     }
 
 
