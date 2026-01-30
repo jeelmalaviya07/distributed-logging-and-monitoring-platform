@@ -1,11 +1,14 @@
 package com.jeel.logging.processor.consumer;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jeel.logging.processor.persistence.entity.DlqEventEntity;
+import com.jeel.logging.processor.persistence.entity.ProcessedEventEntity;
+import com.jeel.logging.processor.persistence.repository.DlqEventRepository;
+import com.jeel.logging.processor.persistence.repository.ProcessedEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
-import com.jeel.logging.processor.idempotency.ProcessedEventStore;
 import com.jeel.logging.processor.validation.LogIngestedEventValidator;
 import com.jeel.logging.processor.kafka.RetryKafkaPublisher;
 import com.jeel.logging.common.events.LogIngestedEvent;
@@ -13,28 +16,34 @@ import com.jeel.logging.common.events.LogEvent;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import com.jeel.logging.processor.kafka.DlqKafkaPublisher;
 
+import java.time.Instant;
+import java.util.UUID;
+
 @Component
 public class LogIngestedEventConsumer {
 
-    private final ProcessedEventStore processedEventStore;
+    private final ProcessedEventRepository processedEventRepository;
     private final LogIngestedEventValidator validator;
     private final RetryKafkaPublisher retryKafkaPublisher;
     private final DlqKafkaPublisher dlqKafkaPublisher;
-
+    private final DlqEventRepository dlqEventRepository;
+    private final ObjectMapper objectMapper;
 
     public LogIngestedEventConsumer(
-            ProcessedEventStore processedEventStore,
+            ProcessedEventRepository processedEventRepository,
             LogIngestedEventValidator validator,
             RetryKafkaPublisher retryKafkaPublisher,
-            DlqKafkaPublisher dlqKafkaPublisher
+            DlqKafkaPublisher dlqKafkaPublisher,
+            DlqEventRepository dlqEventRepository,
+            ObjectMapper objectMapper
     ) {
-        this.processedEventStore = processedEventStore;
+        this.processedEventRepository = processedEventRepository;
         this.validator = validator;
         this.retryKafkaPublisher = retryKafkaPublisher;
         this.dlqKafkaPublisher = dlqKafkaPublisher;
+        this.dlqEventRepository = dlqEventRepository;
+        this.objectMapper = objectMapper;
     }
-
-
 
     private static final Logger log =
             LoggerFactory.getLogger(LogIngestedEventConsumer.class);
@@ -61,7 +70,7 @@ public class LogIngestedEventConsumer {
 
             validator.validate(event);
 
-            if (processedEventStore.isProcessed(eventId)) {
+            if (processedEventRepository.existsById(eventId)) {
                 log.warn("⚠️ Duplicate event ignored | eventId={}", eventId);
                 ack.acknowledge();
                 return;
@@ -76,7 +85,11 @@ public class LogIngestedEventConsumer {
                 processSingleLog(event, logEvent);
             }
 
-            processedEventStore.markProcessed(eventId);
+            ProcessedEventEntity pe = new ProcessedEventEntity();
+            pe.setEventId(eventId);
+            pe.setProcessedAt(Instant.now());
+            processedEventRepository.save(pe);
+
             ack.acknowledge();
 
         } catch (Exception ex) {
@@ -108,7 +121,25 @@ public class LogIngestedEventConsumer {
                     retryCount
             );
 
-            ack.acknowledge();
+                DlqEventEntity e = new DlqEventEntity();
+                e.setId(UUID.randomUUID());
+                e.setTenantId(event.getTenantId());
+                e.setRequestId(event.getRequestId());
+                e.setServiceName(event.getServiceName());
+                e.setEnvironment(event.getEnvironment());
+                e.setFailureReason(ex.getClass().getSimpleName() + ": " + ex.getMessage());
+                e.setFinalRetryCount(retryCount);
+                try {
+                    e.setEventPayload(objectMapper.writeValueAsString(event));
+                } catch (Exception jsonEx) {
+                    e.setEventPayload("{\"error\":\"event_object_to_string_failed\"}");
+                }
+                e.setCreatedAt(Instant.now());
+
+                dlqEventRepository.save(e);
+
+
+                ack.acknowledge();
         }
 
     }
