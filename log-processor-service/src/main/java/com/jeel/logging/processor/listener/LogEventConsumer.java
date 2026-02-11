@@ -1,6 +1,7 @@
 package com.jeel.logging.processor.listener;
 
 import com.jeel.logging.common.events.LogIngestedEvent;
+import com.jeel.logging.processor.config.RetryConfig;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;

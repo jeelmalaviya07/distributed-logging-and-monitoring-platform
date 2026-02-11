@@ -23,8 +23,8 @@ public class LogIngestionServiceImpl implements LogIngestionService {
 
         //  Build Kafka event
         LogIngestedEvent event = new LogIngestedEvent();
-        event.setTenantId(null);
-        //event.setTenantId(tenantId);
+//        event.setTenantId(null);
+        event.setTenantId(tenantId);
         event.setRequestId(requestId);
         event.setServiceName(request.getServiceName());
         event.setEnvironment(request.getEnvironment());

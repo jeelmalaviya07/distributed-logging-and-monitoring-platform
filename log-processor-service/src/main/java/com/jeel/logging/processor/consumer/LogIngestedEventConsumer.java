@@ -1,9 +1,16 @@
 package com.jeel.logging.processor.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jeel.logging.processor.config.RetryConfig;
+import com.jeel.logging.processor.metrics.ConsumerMetrics;
 import com.jeel.logging.processor.persistence.entity.DlqEventEntity;
+import com.jeel.logging.processor.persistence.entity.ErrorGroupEntity;
+import com.jeel.logging.processor.persistence.entity.ErrorOccurrenceEntity;
 import com.jeel.logging.processor.persistence.entity.ProcessedEventEntity;
 import com.jeel.logging.processor.persistence.repository.DlqEventRepository;
+import com.jeel.logging.processor.persistence.repository.ErrorGroupRepository;
+import com.jeel.logging.processor.persistence.repository.ErrorOccurrenceRepository;
 import com.jeel.logging.processor.persistence.repository.ProcessedEventRepository;
+import com.jeel.logging.processor.retry.RetryDecider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -28,6 +35,11 @@ public class LogIngestedEventConsumer {
     private final DlqKafkaPublisher dlqKafkaPublisher;
     private final DlqEventRepository dlqEventRepository;
     private final ObjectMapper objectMapper;
+    private final ErrorGroupRepository errorGroupRepository;
+    private final ErrorOccurrenceRepository errorOccurrenceRepository;
+    private final RetryConfig retryConfig;
+    private final RetryDecider retryDecider;
+    private final ConsumerMetrics consumerMetrics;
 
     public LogIngestedEventConsumer(
             ProcessedEventRepository processedEventRepository,
@@ -35,7 +47,12 @@ public class LogIngestedEventConsumer {
             RetryKafkaPublisher retryKafkaPublisher,
             DlqKafkaPublisher dlqKafkaPublisher,
             DlqEventRepository dlqEventRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ErrorGroupRepository errorGroupRepository,
+            ErrorOccurrenceRepository errorOccurrenceRepository,
+            RetryConfig retryConfig,
+            RetryDecider retryDecider,
+            ConsumerMetrics consumerMetrics
     ) {
         this.processedEventRepository = processedEventRepository;
         this.validator = validator;
@@ -43,6 +60,11 @@ public class LogIngestedEventConsumer {
         this.dlqKafkaPublisher = dlqKafkaPublisher;
         this.dlqEventRepository = dlqEventRepository;
         this.objectMapper = objectMapper;
+        this.errorGroupRepository = errorGroupRepository;
+        this.errorOccurrenceRepository = errorOccurrenceRepository;
+        this.retryConfig = retryConfig;
+        this.retryDecider = retryDecider;
+        this.consumerMetrics = consumerMetrics;
     }
 
     private static final Logger log =
@@ -56,7 +78,7 @@ public class LogIngestedEventConsumer {
             LogIngestedEvent event,
             Acknowledgment ack,
             ConsumerRecord<String, LogIngestedEvent> record
-    ) {
+    ) throws InterruptedException {
 
         int retryCount = RetryKafkaPublisher.extractRetryCount(record.headers());
 
@@ -89,82 +111,157 @@ public class LogIngestedEventConsumer {
             pe.setEventId(eventId);
             pe.setProcessedAt(Instant.now());
             processedEventRepository.save(pe);
-
+            consumerMetrics.markSuccess();
             ack.acknowledge();
 
         } catch (Exception ex) {
 
             log.error("Processing failed | eventId={} | retryCount={}",
-                    event.getTenantId() + ":" + event.getRequestId(),
+                    eventId,
                     retryCount,
-                    ex);
+                    ex
+            );
 
+            // ✅ Check if retryable
+            boolean retryable = retryDecider.isRetryable(ex);
+
+            if (!retryable) {
+
+                log.error("Non-retryable failure → Direct DLQ | eventId={}", eventId);
+
+                dlqKafkaPublisher.publishToDlq(
+                        event,
+                        "NON_RETRYABLE: " + ex.getMessage(),
+                        retryCount
+                );
+
+                ack.acknowledge();
+                return;
+            }
+
+            // ✅ Retry if allowed
             int nextRetryCount = retryCount + 1;
 
-            if (nextRetryCount <= 3) {
+            if (nextRetryCount <= retryConfig.getMaxAttempts()) {
 
                 log.warn("Retrying event | eventId={} | attempt={}",
-                        event.getTenantId() + ":" + event.getRequestId(),
-                        nextRetryCount);
+                        eventId,
+                        nextRetryCount
+                );
 
+                try {
+                    Thread.sleep(retryConfig.getBackoffMs() * nextRetryCount);
+                } catch (InterruptedException ignored) {}
+
+                consumerMetrics.markRetry();
                 retryKafkaPublisher.publishWithRetryHeader(event, nextRetryCount);
                 ack.acknowledge();
 
             } else {
 
-            log.error("Max retries exceeded | routing to DLQ | eventId={}",
-                    eventId);
+                log.error("Max retries exceeded → DLQ | eventId={}", eventId);
 
-            dlqKafkaPublisher.publishToDlq(
-                    event,
-                    ex.getClass().getSimpleName() + ": " + ex.getMessage(),
-                    retryCount
-            );
-
-                DlqEventEntity e = new DlqEventEntity();
-                e.setId(UUID.randomUUID());
-                e.setTenantId(event.getTenantId());
-                e.setRequestId(event.getRequestId());
-                e.setServiceName(event.getServiceName());
-                e.setEnvironment(event.getEnvironment());
-                e.setFailureReason(ex.getClass().getSimpleName() + ": " + ex.getMessage());
-                e.setFinalRetryCount(retryCount);
-                try {
-                    e.setEventPayload(objectMapper.writeValueAsString(event));
-                } catch (Exception jsonEx) {
-                    e.setEventPayload("{\"error\":\"event_object_to_string_failed\"}");
-                }
-                e.setCreatedAt(Instant.now());
-
-                dlqEventRepository.save(e);
-
+                consumerMetrics.markDlq();
+                dlqKafkaPublisher.publishToDlq(
+                        event,
+                        "MAX_RETRIES_EXCEEDED: " + ex.getMessage(),
+                        retryCount
+                );
 
                 ack.acknowledge();
+            }
         }
-
-    }
     }
 
 
-    private void processSingleLog(LogIngestedEvent batch, LogEvent logEvent) {
+    private void processSingleLog(LogIngestedEvent event, LogEvent logEvent) {
 
         if ("ERROR".equalsIgnoreCase(logEvent.getLevel())) {
 
-            String fingerprint = generateFingerprint(batch, logEvent);
+            String fingerprint = generateFingerprint(event, logEvent);
 
             log.warn(
                     "ERROR detected | service={} | fingerprint={}",
-                    batch.getServiceName(),
+                    event.getServiceName(),
                     fingerprint
             );
+
+            Instant now = Instant.now();
+
+            ErrorGroupEntity group =
+                    errorGroupRepository
+                            .findByTenantIdAndFingerprint(
+                                    event.getTenantId(),
+                                    fingerprint
+                            )
+                            .orElseGet(() -> {
+                                ErrorGroupEntity g = new ErrorGroupEntity();
+                                g.setId(UUID.randomUUID());
+                                g.setTenantId(event.getTenantId());
+                                g.setServiceName(event.getServiceName());
+                                g.setEnvironment(event.getEnvironment());
+                                g.setFingerprint(fingerprint);
+                                g.setExceptionType(
+                                        logEvent.getException() != null
+                                                ? logEvent.getException().getType()
+                                                : null
+                                );
+                                g.setExceptionMessage(logEvent.getMessage());
+                                g.setSeverity(logEvent.getLevel());
+                                g.setFirstSeen(now);
+                                g.setLastSeen(now);
+                                g.setOccurrenceCount(0);
+                                g.setResolved(false);
+                                g.setCreatedAt(now);
+                                g.setUpdatedAt(now);
+                                return errorGroupRepository.save(g);
+                            });
+
+            group.setOccurrenceCount(group.getOccurrenceCount() + 1);
+            group.setLastSeen(now);
+            group.setUpdatedAt(now);
+
+            errorGroupRepository.save(group);
+
+            ErrorOccurrenceEntity occ = new ErrorOccurrenceEntity();
+
+            occ.setId(UUID.randomUUID());
+            occ.setTenantId(event.getTenantId());
+            occ.setErrorGroup(group);
+            occ.setRequestId(event.getRequestId());
+            occ.setServiceName(event.getServiceName());
+            occ.setEnvironment(event.getEnvironment());
+            occ.setTimestamp(logEvent.getTimestamp());
+            occ.setLogLevel(logEvent.getLevel());
+            occ.setMessage(logEvent.getMessage());
+            occ.setTraceId(logEvent.getTraceId());
+            occ.setSpanId(logEvent.getSpanId());
+            occ.setCreatedAt(now);
+
+            errorOccurrenceRepository.save(occ);
+
         }
     }
 
     private String generateFingerprint(LogIngestedEvent batch, LogEvent logEvent) {
-        return Integer.toHexString(
-                (batch.getServiceName()
-                        + batch.getEnvironment()
-                        + logEvent.getException()).hashCode()
-        );
+
+        String exceptionType =
+                logEvent.getException() != null
+                        ? logEvent.getException().getType()
+                        : "NO_EXCEPTION";
+
+        String exceptionMessage =
+                logEvent.getException() != null
+                        ? logEvent.getException().getMessage()
+                        : logEvent.getMessage();
+
+        String raw =
+                batch.getTenantId() + "|" +
+                        batch.getServiceName() + "|" +
+                        batch.getEnvironment() + "|" +
+                        exceptionType + "|" +
+                        exceptionMessage;
+
+        return Integer.toHexString(raw.hashCode());
     }
 }
