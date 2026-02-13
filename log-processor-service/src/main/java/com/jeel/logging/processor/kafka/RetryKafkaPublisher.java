@@ -1,9 +1,13 @@
 package com.jeel.logging.processor.kafka;
 
 import com.jeel.logging.common.events.LogIngestedEvent;
+import com.jeel.logging.processor.retry.RetryTopicConsumer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
+import org.slf4j.ILoggerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -14,7 +18,9 @@ import java.util.Optional;
 public class RetryKafkaPublisher {
 
     private static final String RETRY_HEADER = "x-retry-count";
-    private static final String TOPIC = "logs.ingested.v1";
+    private static final String TOPIC = "logs.retry.v1";
+    private static final Logger log =
+            LoggerFactory.getLogger(RetryKafkaPublisher.class);
 
     private final KafkaTemplate<String, LogIngestedEvent> kafkaTemplate;
 
@@ -55,4 +61,16 @@ public class RetryKafkaPublisher {
 
         return 0;
     }
+
+    public void publishBackToMain(LogIngestedEvent event) {
+
+        kafkaTemplate.send(
+                "logs.ingested.v1",
+                event.getTenantId(),
+                event
+        );
+
+        log.info("✅ Sent event back to main topic for retry processing");
+    }
+
 }

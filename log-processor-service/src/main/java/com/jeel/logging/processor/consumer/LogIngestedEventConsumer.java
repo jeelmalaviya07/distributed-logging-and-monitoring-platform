@@ -71,14 +71,14 @@ public class LogIngestedEventConsumer {
             LoggerFactory.getLogger(LogIngestedEventConsumer.class);
 
     @KafkaListener(
-            topics = "logs.ingested.v1",
+            topics = {"logs.ingested.v1", "logs.retry.v1"},
             containerFactory = "kafkaListenerContainerFactory"
     )
     public void consume(
             LogIngestedEvent event,
             Acknowledgment ack,
             ConsumerRecord<String, LogIngestedEvent> record
-    ) throws InterruptedException {
+    )  {
 
         int retryCount = RetryKafkaPublisher.extractRetryCount(record.headers());
 
@@ -128,7 +128,7 @@ public class LogIngestedEventConsumer {
             if (!retryable) {
 
                 log.error("Non-retryable failure → Direct DLQ | eventId={}", eventId);
-
+                consumerMetrics.markDlq();
                 dlqKafkaPublisher.publishToDlq(
                         event,
                         "NON_RETRYABLE: " + ex.getMessage(),
