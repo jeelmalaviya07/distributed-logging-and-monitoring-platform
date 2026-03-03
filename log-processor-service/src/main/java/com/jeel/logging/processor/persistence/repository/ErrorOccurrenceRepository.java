@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Repository
@@ -33,5 +34,20 @@ public interface ErrorOccurrenceRepository
     Page<OccurrenceResponse> findOccurrencesByGroupId(
             UUID groupId,
             Pageable pageable
+    );
+
+    @Query("""
+       SELECT COUNT(o)
+       FROM ErrorOccurrenceEntity o
+       WHERE o.tenantId = :tenantId
+       AND o.serviceName = :serviceName
+       AND o.logLevel = :severity
+       AND o.timestamp >= :from
+       """)
+    long countByTenantServiceSeverityAfter(
+            String tenantId,
+            String serviceName,
+            String severity,
+            Instant from
     );
 }

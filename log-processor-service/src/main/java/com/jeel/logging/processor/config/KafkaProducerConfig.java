@@ -1,6 +1,6 @@
 package com.jeel.logging.processor.config;
 
-import com.jeel.logging.common.events.LogIngestedEvent;
+import com.jeel.logging.common.events.NormalizedLogEvent;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.context.annotation.Bean;
@@ -17,23 +17,21 @@ import java.util.Map;
 public class KafkaProducerConfig {
 
     @Bean
-    public ProducerFactory<String, LogIngestedEvent> producerFactory() {
+    public ProducerFactory<String, NormalizedLogEvent> normalizedProducerFactory() {
 
         Map<String, Object> props = new HashMap<>();
 
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
 
-        // 🔥 Important to avoid type header mismatch
         props.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
 
         return new DefaultKafkaProducerFactory<>(props);
     }
 
     @Bean
-    public KafkaTemplate<String, LogIngestedEvent> kafkaTemplate() {
-        return new KafkaTemplate<>(producerFactory());
+    public KafkaTemplate<String, NormalizedLogEvent> normalizedKafkaTemplate() {
+        return new KafkaTemplate<>(normalizedProducerFactory());
     }
 }

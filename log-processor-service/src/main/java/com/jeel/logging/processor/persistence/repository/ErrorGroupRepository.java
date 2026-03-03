@@ -6,6 +6,7 @@ import com.jeel.logging.processor.persistence.entity.ErrorGroupEntity;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
@@ -14,7 +15,8 @@ import java.util.UUID;
 
 @Repository
 public interface ErrorGroupRepository
-        extends JpaRepository<ErrorGroupEntity, UUID> {
+        extends JpaRepository<ErrorGroupEntity, UUID>,
+        JpaSpecificationExecutor<ErrorGroupEntity> {
 
     Optional<ErrorGroupEntity> findByTenantIdAndFingerprint(
             String tenantId,

@@ -9,6 +9,11 @@ import java.util.UUID;
         name = "error_groups",
         uniqueConstraints = {
                 @UniqueConstraint(columnNames = {"tenant_id", "fingerprint"})
+        },
+        indexes = {
+                @Index(name = "idx_tenant_last_seen", columnList = "tenant_id,last_seen"),
+                @Index(name = "idx_tenant_severity", columnList = "tenant_id,severity"),
+                @Index(name = "idx_tenant_resolved", columnList = "tenant_id,is_resolved")
         }
 )
 public class ErrorGroupEntity {

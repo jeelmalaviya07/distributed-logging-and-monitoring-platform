@@ -1,6 +1,6 @@
 package com.jeel.logging.processor.kafka;
 
-import com.jeel.logging.common.events.LogIngestedEvent;
+import com.jeel.logging.common.events.NormalizedLogEvent;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -11,21 +11,21 @@ import java.nio.charset.StandardCharsets;
 @Component
 public class DlqKafkaPublisher {
 
-    private static final String DLQ_TOPIC = "logs.ingested.dlq.v1";
+    private static final String DLQ_TOPIC = "logs.dlq.v1";
 
-    private final KafkaTemplate<String, LogIngestedEvent> kafkaTemplate;
+    private final KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate;
 
-    public DlqKafkaPublisher(KafkaTemplate<String, LogIngestedEvent> kafkaTemplate) {
+    public DlqKafkaPublisher(KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
 
     public void publishToDlq(
-            LogIngestedEvent event,
+            NormalizedLogEvent event,
             String failureReason,
             int finalRetryCount
     ) {
 
-        ProducerRecord<String, LogIngestedEvent> record =
+        ProducerRecord<String, NormalizedLogEvent> record =
                 new ProducerRecord<>(DLQ_TOPIC, event.getTenantId(), event);
 
         record.headers().add(

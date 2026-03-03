@@ -17,7 +17,7 @@ public class KafkaLogEventPublisher implements LogEventPublisher {
     private static final Logger log =
             LoggerFactory.getLogger(KafkaLogEventPublisher.class);
 
-    private static final String TOPIC = "logs.ingested.v1";
+    private static final String TOPIC = "logs.raw.v1";
 
     private final KafkaTemplate<String, LogIngestedEvent> kafkaTemplate;
 

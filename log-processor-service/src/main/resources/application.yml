@@ -1,5 +1,6 @@
 server:
-  port: 8081
+  port: 8082
+
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/log_intelligence
@@ -10,12 +11,36 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         format_sql: true
 
-# ✅ Custom Retry Config
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: log-processor-group
+      auto-offset-reset: earliest
+    producer:
+      acks: all
+
 app:
   retry:
     max-attempts: 3
+  notification:
+    max-attempts: 3
+    backoff-ms: 1000
+    timeout-ms: 3000
+  kafka:
+    topics:
+      raw: logs.raw.v1
+      normalized: logs.normalized.v1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    prometheus:
+      enabled: true

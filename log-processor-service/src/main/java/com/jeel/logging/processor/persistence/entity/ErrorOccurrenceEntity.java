@@ -1,6 +1,9 @@
 package com.jeel.logging.processor.persistence.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -43,9 +46,11 @@ public class ErrorOccurrenceEntity {
     @Column(name = "span_id", length = 128)
     private String spanId;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "exception_payload", columnDefinition = "jsonb")
     private String exceptionPayload;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "raw_event_payload", columnDefinition = "jsonb")
     private String rawEventPayload;
 

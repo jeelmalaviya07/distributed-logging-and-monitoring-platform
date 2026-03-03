@@ -1,8 +1,10 @@
 package com.jeel.logging.processor.consumer;
 
-import com.jeel.logging.common.events.LogEvent;
-import com.jeel.logging.common.events.LogIngestedEvent;
+import com.jeel.logging.common.events.NormalizedLogEvent;
+import com.jeel.logging.processor.kafka.DlqKafkaPublisher;
+import com.jeel.logging.processor.kafka.RetryKafkaPublisher;
 import com.jeel.logging.processor.metrics.ConsumerMetrics;
+import com.jeel.logging.processor.metrics.SystemMetrics;
 import com.jeel.logging.processor.persistence.entity.ErrorGroupEntity;
 import com.jeel.logging.processor.persistence.entity.ErrorOccurrenceEntity;
 import com.jeel.logging.processor.persistence.entity.ProcessedEventEntity;
@@ -10,72 +12,67 @@ import com.jeel.logging.processor.persistence.repository.ErrorGroupRepository;
 import com.jeel.logging.processor.persistence.repository.ErrorOccurrenceRepository;
 import com.jeel.logging.processor.persistence.repository.ProcessedEventRepository;
 import com.jeel.logging.processor.retry.RetryDecider;
-import com.jeel.logging.processor.retry.RetryJobService;
-import com.jeel.logging.processor.validation.LogIngestedEventValidator;
-import com.jeel.logging.processor.kafka.DlqKafkaPublisher;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
 @Component
-public class LogIngestedEventConsumer {
+public class NormalizedLogStorageConsumer {
 
     private static final Logger log =
-            LoggerFactory.getLogger(LogIngestedEventConsumer.class);
+            LoggerFactory.getLogger(NormalizedLogStorageConsumer.class);
 
     private final ProcessedEventRepository processedEventRepository;
-    private final LogIngestedEventValidator validator;
     private final ErrorGroupRepository errorGroupRepository;
     private final ErrorOccurrenceRepository errorOccurrenceRepository;
     private final DlqKafkaPublisher dlqKafkaPublisher;
+    private final RetryKafkaPublisher retryKafkaPublisher;
     private final ConsumerMetrics consumerMetrics;
     private final RetryDecider retryDecider;
-    private final RetryJobService retryJobService;
+    private final SystemMetrics metrics;
 
-    public LogIngestedEventConsumer(
+    public NormalizedLogStorageConsumer(
             ProcessedEventRepository processedEventRepository,
-            LogIngestedEventValidator validator,
             ErrorGroupRepository errorGroupRepository,
             ErrorOccurrenceRepository errorOccurrenceRepository,
             DlqKafkaPublisher dlqKafkaPublisher,
+            RetryKafkaPublisher retryKafkaPublisher,
             ConsumerMetrics consumerMetrics,
             RetryDecider retryDecider,
-            RetryJobService retryJobService
+            SystemMetrics metrics
     ) {
         this.processedEventRepository = processedEventRepository;
-        this.validator = validator;
         this.errorGroupRepository = errorGroupRepository;
         this.errorOccurrenceRepository = errorOccurrenceRepository;
         this.dlqKafkaPublisher = dlqKafkaPublisher;
+        this.retryKafkaPublisher = retryKafkaPublisher;
         this.consumerMetrics = consumerMetrics;
         this.retryDecider = retryDecider;
-        this.retryJobService = retryJobService;
+        this.metrics = metrics;
     }
 
     @KafkaListener(
-            topics = {"logs.ingested.v1"},
-            containerFactory = "kafkaListenerContainerFactory"
+            topics = {"logs.normalized.v1"},
+            containerFactory = "normalizedKafkaListenerContainerFactory"
     )
     public void consume(
-            LogIngestedEvent event,
+            ConsumerRecord<String, NormalizedLogEvent> record,
             Acknowledgment ack
     ) {
 
-        String safeTenantId = event.getTenantId() != null
-                ? event.getTenantId()
-                : "UNKNOWN";
-
-        String eventId = safeTenantId + ":" + event.getRequestId();
+        NormalizedLogEvent event = record.value();
+        String eventId = event.getTenantId() + ":" + event.getEventId();
 
         try {
-
-            validator.validate(event);
 
             if (processedEventRepository.existsById(eventId)) {
                 log.warn("Duplicate event ignored | eventId={}", eventId);
@@ -83,63 +80,74 @@ public class LogIngestedEventConsumer {
                 return;
             }
 
-            for (LogEvent logEvent : event.getLogs()) {
-                processSingleLog(event, logEvent);
-            }
+            processSingleNormalizedEvent(event);
 
             ProcessedEventEntity pe = new ProcessedEventEntity();
             pe.setEventId(eventId);
             pe.setProcessedAt(Instant.now());
             processedEventRepository.save(pe);
 
+            metrics.incrementProcessingSuccess();
             consumerMetrics.markSuccess();
             ack.acknowledge();
 
-        } catch (Exception ex) {
+        }catch (Exception ex) {
 
             log.error("Processing failed | eventId={}", eventId, ex);
 
-            boolean retryable = retryDecider.isRetryable(ex);
+            int retryCount = extractRetryCount(record);
 
-            if (!retryable) {
-
-                dlqKafkaPublisher.publishToDlq(
-                        event,
-                        "NON_RETRYABLE: " + ex.getMessage(),
-                        0
-                );
-
-                consumerMetrics.markDlq();
+            if (!retryDecider.isRetryable(ex)) {
+                dlqKafkaPublisher.publishToDlq(event, "NON_RETRYABLE: "+ex.getMessage(), retryCount);
                 ack.acknowledge();
                 return;
             }
 
-            // Durable retry (DB-based)
-            retryJobService.scheduleRetry(
-                    event,
-                    1,
-                    ex.getMessage()
-            );
+            switch (retryCount) {
+                case 0:
+                    retryKafkaPublisher.publishToRetry(event, 1);
+                    break;
+                case 1:
+                    retryKafkaPublisher.publishToRetry(event, 2);
+                    break;
+                case 2:
+                    retryKafkaPublisher.publishToRetry(event, 3);
+                    break;
+                default:
+                    dlqKafkaPublisher.publishToDlq(event, "RETRY_EXHAUSTED", retryCount);
+            }
 
+            metrics.incrementRetryScheduled();
             consumerMetrics.markRetry();
             ack.acknowledge();
         }
     }
 
-    private void processSingleLog(LogIngestedEvent event, LogEvent logEvent) {
+    private int extractRetryCount(ConsumerRecord<String, NormalizedLogEvent> record) {
 
-        if (!"ERROR".equalsIgnoreCase(logEvent.getLevel())) {
+        Header header = record.headers().lastHeader("x-retry-count");
+
+        if (header == null) {
+            return 0;
+        }
+
+        return Integer.parseInt(
+                new String(header.value(), StandardCharsets.UTF_8));
+    }
+
+    private void processSingleNormalizedEvent(NormalizedLogEvent event) {
+
+        if (!"ERROR".equalsIgnoreCase(event.getLogLevel())) {
             return;
         }
 
-        String fingerprint = generateFingerprint(event, logEvent);
         Instant now = Instant.now();
 
         ErrorGroupEntity group =
                 errorGroupRepository
                         .findByTenantIdAndFingerprint(
                                 event.getTenantId(),
-                                fingerprint
+                                event.getFingerprint()
                         )
                         .orElseGet(() -> {
                             ErrorGroupEntity g = new ErrorGroupEntity();
@@ -147,14 +155,10 @@ public class LogIngestedEventConsumer {
                             g.setTenantId(event.getTenantId());
                             g.setServiceName(event.getServiceName());
                             g.setEnvironment(event.getEnvironment());
-                            g.setFingerprint(fingerprint);
-                            g.setExceptionType(
-                                    logEvent.getException() != null
-                                            ? logEvent.getException().getType()
-                                            : null
-                            );
-                            g.setExceptionMessage(logEvent.getMessage());
-                            g.setSeverity(logEvent.getLevel());
+                            g.setFingerprint(event.getFingerprint());
+                            g.setExceptionType(event.getExceptionType());
+                            g.setExceptionMessage(event.getExceptionMessage());
+                            g.setSeverity(event.getLogLevel());
                             g.setFirstSeen(now);
                             g.setLastSeen(now);
                             g.setOccurrenceCount(0);
@@ -174,38 +178,16 @@ public class LogIngestedEventConsumer {
         occ.setId(UUID.randomUUID());
         occ.setTenantId(event.getTenantId());
         occ.setErrorGroup(group);
-        occ.setRequestId(event.getRequestId());
+        occ.setRequestId(event.getEventId());
         occ.setServiceName(event.getServiceName());
         occ.setEnvironment(event.getEnvironment());
-        occ.setTimestamp(logEvent.getTimestamp());
-        occ.setLogLevel(logEvent.getLevel());
-        occ.setMessage(logEvent.getMessage());
-        occ.setTraceId(logEvent.getTraceId());
-        occ.setSpanId(logEvent.getSpanId());
+        occ.setTimestamp(event.getTimestamp());
+        occ.setLogLevel(event.getLogLevel());
+        occ.setMessage(event.getMessage());
+        occ.setTraceId(event.getTraceId());
+        occ.setSpanId(event.getSpanId());
         occ.setCreatedAt(now);
 
         errorOccurrenceRepository.save(occ);
-    }
-
-    private String generateFingerprint(LogIngestedEvent batch, LogEvent logEvent) {
-
-        String exceptionType =
-                logEvent.getException() != null
-                        ? logEvent.getException().getType()
-                        : "NO_EXCEPTION";
-
-        String exceptionMessage =
-                logEvent.getException() != null
-                        ? logEvent.getException().getMessage()
-                        : logEvent.getMessage();
-
-        String raw =
-                batch.getTenantId() + "|" +
-                        batch.getServiceName() + "|" +
-                        batch.getEnvironment() + "|" +
-                        exceptionType + "|" +
-                        exceptionMessage;
-
-        return Integer.toHexString(raw.hashCode());
     }
 }

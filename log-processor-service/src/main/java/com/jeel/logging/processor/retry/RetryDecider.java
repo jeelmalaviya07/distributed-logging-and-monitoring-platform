@@ -1,5 +1,6 @@
 package com.jeel.logging.processor.retry;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
 import java.sql.SQLTransientConnectionException;
@@ -29,7 +30,12 @@ public class RetryDecider {
     private boolean isPermanent(Exception ex) {
 
         // Validation errors will never succeed
-        if (ex instanceof IllegalArgumentException) {
+        if (ex instanceof DataIntegrityViolationException) {
+            return true;
+        }
+
+        if (ex.getMessage() != null &&
+                ex.getMessage().toLowerCase().contains("null")) {
             return true;
         }
 
