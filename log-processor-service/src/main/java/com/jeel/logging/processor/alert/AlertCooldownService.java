@@ -16,11 +16,11 @@ public class AlertCooldownService {
         this.redisTemplate = redisTemplate;
     }
 
-    public boolean canPublish(String tenantId, String groupId) {
+    public boolean isInCooldown(String tenantId, String groupId) {
 
         String key = "obs:{" + tenantId + "}:alertcooldown:" + groupId;
 
-        return !(redisTemplate.hasKey(key));
+        return Boolean.TRUE.equals(redisTemplate.hasKey(key));
     }
 
         public boolean tryAcquire(String tenantId, String groupId) {

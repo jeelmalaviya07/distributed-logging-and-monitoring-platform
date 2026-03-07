@@ -221,12 +221,12 @@ public class NormalizedLogStorageConsumer {
 
         if (slidingWindowAlertService.shouldAlert(count)) {
 
-            if (alertBucketService.shouldTriggerEvaluation(
+            if (!alertCooldownService.isInCooldown(
                     event.getTenantId(),
                     group.getId().toString()
             )) {
 
-                if (alertCooldownService.canPublish(
+                if (alertBucketService.shouldTriggerEvaluation(
                         event.getTenantId(),
                         group.getId().toString()
                 )) {
@@ -236,7 +236,6 @@ public class NormalizedLogStorageConsumer {
                             group.getId().toString(),
                             event.getServiceName()
                     );
-
                 }
             }
         }

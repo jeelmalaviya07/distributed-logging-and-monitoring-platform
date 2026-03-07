@@ -4,6 +4,7 @@ import com.jeel.logging.processor.alert.AlertEvaluateEvent;
 import com.jeel.logging.processor.persistence.repository.AlertHistoryRepository;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -26,7 +27,7 @@ public class AlertWorker {
             topics = "alerts.evaluate.v1",
             containerFactory = "alertKafkaListenerContainerFactory"
     )
-    public void evaluate(AlertEvaluateEvent event) {
+    public void evaluate(AlertEvaluateEvent event, Acknowledgment ack) {
 
         String tenantId = event.getTenantId();
         String groupId = event.getGroupId();
@@ -78,6 +79,8 @@ public class AlertWorker {
             history.setTriggeredAt(java.time.Instant.now());
 
             alertHistoryRepository.save(history);
+
+            ack.acknowledge();
         }
     }
 }
