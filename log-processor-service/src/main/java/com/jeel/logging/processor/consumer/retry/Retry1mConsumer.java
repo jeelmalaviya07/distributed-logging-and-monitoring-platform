@@ -1,7 +1,6 @@
 package com.jeel.logging.processor.consumer.retry;
 
 import com.jeel.logging.common.events.NormalizedLogEvent;
-import com.jeel.logging.processor.alert.notification.EmailNotificationChannel;
 import com.jeel.logging.processor.kafka.RetryKafkaPublisher;
 import com.jeel.logging.processor.kafka.DlqKafkaPublisher;
 import com.jeel.logging.processor.retry.RetryDecider;

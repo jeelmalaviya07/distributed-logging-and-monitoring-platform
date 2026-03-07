@@ -13,9 +13,9 @@ public class DlqKafkaPublisher {
 
     private static final String DLQ_TOPIC = "logs.dlq.v1";
 
-    private final KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public DlqKafkaPublisher(KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate) {
+    public DlqKafkaPublisher(KafkaTemplate<String, Object> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
 
@@ -25,7 +25,7 @@ public class DlqKafkaPublisher {
             int finalRetryCount
     ) {
 
-        ProducerRecord<String, NormalizedLogEvent> record =
+        ProducerRecord<String, Object> record =
                 new ProducerRecord<>(DLQ_TOPIC, event.getTenantId(), event);
 
         record.headers().add(

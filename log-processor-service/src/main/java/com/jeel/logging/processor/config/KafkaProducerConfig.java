@@ -1,6 +1,8 @@
 package com.jeel.logging.processor.config;
 
 import com.jeel.logging.common.events.NormalizedLogEvent;
+import com.jeel.logging.processor.alert.AlertEvaluateEvent;
+import io.lettuce.core.dynamic.annotation.Value;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.context.annotation.Bean;
@@ -17,7 +19,7 @@ import java.util.Map;
 public class KafkaProducerConfig {
 
     @Bean
-    public ProducerFactory<String, NormalizedLogEvent> normalizedProducerFactory() {
+    public ProducerFactory<String, Object> normalizedProducerFactory() {
 
         Map<String, Object> props = new HashMap<>();
 
@@ -31,7 +33,21 @@ public class KafkaProducerConfig {
     }
 
     @Bean
-    public KafkaTemplate<String, NormalizedLogEvent> normalizedKafkaTemplate() {
+    public KafkaTemplate<String, Object> normalizedKafkaTemplate() {
         return new KafkaTemplate<>(normalizedProducerFactory());
     }
+
+//    @Bean
+//    public ProducerFactory<String, AlertEvaluateEvent> normalizedProducerFactory() {
+//
+//        Map<String, Object> props = new HashMap<>();
+//
+//        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+//        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+//        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+//
+//        props.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+//
+//        return new DefaultKafkaProducerFactory<>(props);
+//    }
 }

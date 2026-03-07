@@ -1,6 +1,10 @@
 package com.jeel.logging.processor.consumer;
 
 import com.jeel.logging.common.events.NormalizedLogEvent;
+import com.jeel.logging.processor.alert.AlertBucketService;
+import com.jeel.logging.processor.alert.AlertCooldownService;
+import com.jeel.logging.processor.alert.SlidingWindowAlertService;
+import com.jeel.logging.processor.kafka.AlertEvaluationPublisher;
 import com.jeel.logging.processor.kafka.DlqKafkaPublisher;
 import com.jeel.logging.processor.kafka.RetryKafkaPublisher;
 import com.jeel.logging.processor.metrics.ConsumerMetrics;
@@ -20,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -39,6 +44,10 @@ public class NormalizedLogStorageConsumer {
     private final ConsumerMetrics consumerMetrics;
     private final RetryDecider retryDecider;
     private final SystemMetrics metrics;
+    private final AlertBucketService alertBucketService;
+    private final AlertEvaluationPublisher alertEvaluationPublisher;
+    private final SlidingWindowAlertService slidingWindowAlertService;
+    private final AlertCooldownService alertCooldownService;
 
     public NormalizedLogStorageConsumer(
             ProcessedEventRepository processedEventRepository,
@@ -48,7 +57,11 @@ public class NormalizedLogStorageConsumer {
             RetryKafkaPublisher retryKafkaPublisher,
             ConsumerMetrics consumerMetrics,
             RetryDecider retryDecider,
-            SystemMetrics metrics
+            SystemMetrics metrics,
+            AlertBucketService alertBucketService,
+            AlertEvaluationPublisher alertEvaluationPublisher,
+            SlidingWindowAlertService slidingWindowAlertService,
+            AlertCooldownService alertCooldownService
     ) {
         this.processedEventRepository = processedEventRepository;
         this.errorGroupRepository = errorGroupRepository;
@@ -58,12 +71,17 @@ public class NormalizedLogStorageConsumer {
         this.consumerMetrics = consumerMetrics;
         this.retryDecider = retryDecider;
         this.metrics = metrics;
+        this.alertBucketService = alertBucketService;
+        this.alertEvaluationPublisher = alertEvaluationPublisher;
+        this.slidingWindowAlertService = slidingWindowAlertService;
+        this.alertCooldownService = alertCooldownService;
     }
 
     @KafkaListener(
             topics = {"logs.normalized.v1"},
             containerFactory = "normalizedKafkaListenerContainerFactory"
     )
+    @Transactional //adding as it saved 1 log before it sent an exception in stress testing
     public void consume(
             ConsumerRecord<String, NormalizedLogEvent> record,
             Acknowledgment ack
@@ -71,6 +89,11 @@ public class NormalizedLogStorageConsumer {
 
         NormalizedLogEvent event = record.value();
         String eventId = event.getTenantId() + ":" + event.getEventId();
+
+//        log.info("-----------------------------------");
+//        log.info(record.toString());
+//        log.info(event.getLogLevel());
+//        log.info("======================================");
 
         try {
 
@@ -86,7 +109,6 @@ public class NormalizedLogStorageConsumer {
             pe.setEventId(eventId);
             pe.setProcessedAt(Instant.now());
             processedEventRepository.save(pe);
-
             metrics.incrementProcessingSuccess();
             consumerMetrics.markSuccess();
             ack.acknowledge();
@@ -135,6 +157,7 @@ public class NormalizedLogStorageConsumer {
                 new String(header.value(), StandardCharsets.UTF_8));
     }
 
+    @Transactional
     private void processSingleNormalizedEvent(NormalizedLogEvent event) {
 
         if (!"ERROR".equalsIgnoreCase(event.getLogLevel())) {
@@ -189,5 +212,33 @@ public class NormalizedLogStorageConsumer {
         occ.setCreatedAt(now);
 
         errorOccurrenceRepository.save(occ);
+        log.info("Normalized Log Event");
+
+        long count = slidingWindowAlertService.recordAndCount(
+                event.getTenantId(),
+                group.getId().toString()
+        );
+
+        if (slidingWindowAlertService.shouldAlert(count)) {
+
+            if (alertBucketService.shouldTriggerEvaluation(
+                    event.getTenantId(),
+                    group.getId().toString()
+            )) {
+
+                if (alertCooldownService.canPublish(
+                        event.getTenantId(),
+                        group.getId().toString()
+                )) {
+
+                    alertEvaluationPublisher.publish(
+                            event.getTenantId(),
+                            group.getId().toString(),
+                            event.getServiceName()
+                    );
+
+                }
+            }
+        }
     }
 }

@@ -14,9 +14,9 @@ import java.time.Instant;
 @Component
 public class RetryKafkaPublisher {
 
-    private final KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public RetryKafkaPublisher(KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate) {
+    public RetryKafkaPublisher(KafkaTemplate<String, Object> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
 
@@ -40,7 +40,7 @@ public class RetryKafkaPublisher {
 
         long retryAt = Instant.now().toEpochMilli() + delayMillis;
 
-        ProducerRecord<String, NormalizedLogEvent> record =
+        ProducerRecord<String, Object> record =
                 new ProducerRecord<>(topic, event.getTenantId(), event);
 
         record.headers().add(
@@ -58,7 +58,7 @@ public class RetryKafkaPublisher {
             Headers originalHeaders
     ) {
 
-        ProducerRecord<String, NormalizedLogEvent> record =
+        ProducerRecord<String, Object> record =
                 new ProducerRecord<>(
                         "logs.normalized.v1",
                         event.getTenantId(),

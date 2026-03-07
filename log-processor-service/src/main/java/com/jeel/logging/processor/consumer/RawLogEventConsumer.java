@@ -11,9 +11,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class RawLogEventConsumer {
 
-    private final KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public RawLogEventConsumer(KafkaTemplate<String, NormalizedLogEvent> kafkaTemplate) {
+    public RawLogEventConsumer(KafkaTemplate<String, Object> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
 

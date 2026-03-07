@@ -1,4 +1,4 @@
-package com.jeel.logging.processor.obs.config;
+package com.jeel.logging.ingestion.obs.config;
 
 import io.lettuce.core.resource.DefaultClientResources;
 import org.springframework.context.annotation.Bean;
@@ -19,7 +19,7 @@ public class RedisConfig {
 
         // For now standalone, but cluster-ready
         RedisStandaloneConfiguration config =
-                new RedisStandaloneConfiguration("redis", 6379);
+                new RedisStandaloneConfiguration("localhost", 6379);
 
         LettuceClientConfiguration clientConfig =
                 LettuceClientConfiguration.builder()

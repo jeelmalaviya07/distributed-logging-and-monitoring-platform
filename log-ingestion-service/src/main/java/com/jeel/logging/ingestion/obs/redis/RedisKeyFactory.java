@@ -1,4 +1,4 @@
-package com.jeel.logging.processor.obs.redis;
+package com.jeel.logging.ingestion.obs.redis;
 
 public final class RedisKeyFactory {
 

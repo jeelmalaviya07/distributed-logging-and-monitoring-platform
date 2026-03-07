@@ -1,5 +1,5 @@
-package com.jeel.logging.processor.obs.ratelimit;
-import com.jeel.logging.processor.obs.redis.RedisKeyFactory;
+package com.jeel.logging.ingestion.obs.ratelimit;
+import com.jeel.logging.ingestion.obs.redis.RedisKeyFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -14,8 +14,8 @@ public class RateLimiterService {
     private final StringRedisTemplate redisTemplate;
     private final DefaultRedisScript<Long> script;
 
-    private final long capacity = 1000;        // configurable
-    private final long refillRate = 50;        // tokens per second
+    private final long capacity = 20;        // configurable
+    private final long refillRate = 5;        // tokens per second
 
     public RateLimiterService(StringRedisTemplate redisTemplate) {
         this.redisTemplate = redisTemplate;
