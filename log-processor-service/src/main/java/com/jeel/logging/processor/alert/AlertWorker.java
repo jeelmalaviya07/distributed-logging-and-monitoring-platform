@@ -14,13 +14,16 @@ public class AlertWorker {
 
     private final RedisTemplate<String, String> redisTemplate;
     private final AlertHistoryRepository alertHistoryRepository;
+    private final AlertEngine alertEngine;
 
     public AlertWorker(
             RedisTemplate<String, String> redisTemplate,
-            AlertHistoryRepository alertHistoryRepository
+            AlertHistoryRepository alertHistoryRepository,
+            AlertEngine alertEngine
     ){
         this.redisTemplate = redisTemplate;
         this.alertHistoryRepository = alertHistoryRepository;
+        this.alertEngine = alertEngine;
     }
 
     @KafkaListener(
@@ -70,16 +73,21 @@ public class AlertWorker {
             );
 
             // optional: persist alert history
-            AlertHistory history = new AlertHistory();
-            history.setRuleId(0L);
-            history.setTenantId(tenantId);
-            history.setServiceName(event.getServiceName());
-            history.setSeverity("ERROR");
-            history.setTriggeredCount((long) count.intValue());
-            history.setTriggeredAt(java.time.Instant.now());
-
-            alertHistoryRepository.save(history);
-
+//            AlertHistory history = new AlertHistory();
+//            history.setRuleId(0L);
+//            history.setTenantId(tenantId);
+//            history.setServiceName(event.getServiceName());
+//            history.setSeverity("ERROR");
+//            history.setTriggeredCount((long) count.intValue());
+//            history.setTriggeredAt(java.time.Instant.now());
+//
+//            alertHistoryRepository.save(history);
+            alertEngine.evaluate(
+                    tenantId,
+                    event.getServiceName(),
+                    groupId,
+                    count
+            );
             ack.acknowledge();
         }
     }
