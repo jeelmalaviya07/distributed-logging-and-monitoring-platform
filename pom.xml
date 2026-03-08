@@ -21,6 +21,7 @@
         <module>log-ingestion-service</module>
         <module>log-processor-service</module>
         <module>common-log-models</module>
+        <module>notification-service</module>
     </modules>
 
     <properties>

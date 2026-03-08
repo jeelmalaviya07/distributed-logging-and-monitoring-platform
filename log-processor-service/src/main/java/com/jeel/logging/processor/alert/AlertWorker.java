@@ -48,7 +48,7 @@ public class AlertWorker {
             return;
         }
 
-        // threshold (temporary hardcoded until alert_rules is wired)
+        // threshold (temporary hardcoded)
         int threshold = 20;
 
         // check cooldown
